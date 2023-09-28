@@ -1,0 +1,49 @@
+name: Room Manger Application
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+
+    env:
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      DATABASE_TYPE : ${{ secrets.DATABASE_TYPE }}
+      DEBUG : ${{ secrets.DEBUG }}
+      
+      
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+    - name: Build & apply migrations project
+      run: |
+        if [ $DATABASE_TYPE == local ]; then python manage.py migrate; fi
+      
+        
+    - name: Add env and Test with django test
+      run: |
+        # Set Django environment variables
+        export SECRET_KEY=$SECRET_KEY
+        export DATABASE_TYPE=$DATABASE_TYPE
+        export DEBUG=$DEBUG
+
+        python manage.py test
