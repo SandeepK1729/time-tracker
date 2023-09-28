@@ -1,0 +1,7 @@
+crispy-bootstrap5 
+django
+django-debug-toolbar
+django-environ 
+dj_database_url 
+htmx
+psycopg2-binary~=2.9.3 
