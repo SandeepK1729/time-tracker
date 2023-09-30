@@ -9,6 +9,7 @@ from django.utils.translation import gettext_lazy as _
 
 from django.core.mail import send_mail
 
+from .exceptions import TaskNotFoundException
 
 sex_choice = (
     ('Male', 'Male'),
@@ -96,4 +97,230 @@ class AbstractUser(AbstractBaseUser, PermissionsMixin):
 
 class User(AbstractUser):
     # CustomUser model will be act as General class of parent
-    pass
+
+    # Create or Insert of tasks
+    def create_task(self, **kwargs):
+        """ create task of user
+
+        Returns:
+            Task: Task object
+        """
+        return self.tasks.create(**kwargs)
+    
+    def create_tasks(self, tasks):
+        """ create tasks of user
+        
+        Args:
+            List[Dict]: List of tasks
+        Returns:
+            List[Task]: List of Task objects
+        """
+        return self.tasks.bulk_create([
+                Task(**task, created_by=self) for task in tasks
+            ])
+
+    # Read or Retrieve of tasks
+    def get_task(self, **args):
+        """ get task of user
+
+        Returns:
+            Task: Task object
+        """
+        try:
+            return self.tasks.get(**args, created_by=self)
+        except Task.DoesNotExist:
+            raise TaskNotFoundException(args)
+        
+    def get_tasks(self, **args):
+        """ get all tasks of user
+
+        Returns:
+            Queryset: Queryset of tasks
+        """
+        return self.tasks.all().filter(**args).order_by(
+                '-created_at'
+            ).select_related(
+                'created_by'
+            )
+    
+    def get_completed_tasks(self):
+        """ get all completed tasks of user
+
+        Returns:
+            Queryset: Queryset of completed tasks
+        """
+        return self.tasks.filter(
+                is_completed=True
+            ).order_by(
+                '-created_at'
+            ).select_related(
+                'created_by'
+            )
+    
+    def get_active_tasks(self):
+        """ get all active tasks of user
+
+        Returns:
+            Queryset: Queryset of active tasks
+        """
+        
+        return self.tasks.filter(
+                is_completed=False
+            ).filter(
+                begin_at__lte=timezone.now()
+            ).filter(
+                models.Q(end_at__gte=timezone.now()) | models.Q(end_at__isnull=True)
+            ).filter(
+                is_completed = False
+            ).order_by(
+                '-created_at'
+            ).select_related(
+                'created_by'
+            )
+
+    # Update of tasks
+    def update_task(self, id : int, **kwargs):
+        """ update task of user
+
+        Args:
+            self (User): current user
+            id (int): task id
+            **args (dict): task fields
+            
+        Returns:
+            Task: Task object
+        """
+        task = self.get_tasks(id = id)
+        task.update(**kwargs)
+        return task.first()
+    
+    def update_tasks(self, ids: list[int] = [], **args):
+        """ update tasks of user
+        
+        Args:
+            self (User): current user
+            ids (List[int]): list of task ids
+            **args (dict): task fields
+            
+        Returns:
+            int: number of updated tasks
+        """
+        return self.tasks.filter(id__in = ids).filter(created_by = self).update(**args)
+
+    def complete_task(self, id: int):
+        """ complete task of user
+
+        Args:
+            self (User): current user
+            id (int): task id
+
+        Raises:
+            TaskNotFound: if task not found
+
+        Returns:
+            Task : Task object
+        """
+        self.update_task(id = id, is_completed = True)
+        return self.get_task(id = id)
+    
+    def complete_tasks(self, ids: list[int] = []):
+        """ complete tasks of user
+        
+        Args:
+            self (User): current user
+            ids (List[int]): list of task ids
+            
+        Returns:
+            int: number of completed tasks
+        """
+        return self.update_tasks(ids = ids, is_completed = True)
+    
+    def incomplete_task(self, id: int):
+        """ incomplete task of user
+        
+        Args:
+            self (User): current user
+            id (int): task id
+            
+        Returns:
+            Task: Task object
+        """
+        task = self.update_task(id = id, is_completed = False)
+        return task
+    
+    def incomplete_tasks(self, ids: list[int] = []):
+        """ incomplete tasks of user
+        
+        Args:
+            self (User): current user
+            ids (List[int]): list of task ids
+            
+        Returns:
+            int: number of incomplete tasks
+        """
+        return self.update_tasks(ids = ids, is_completed = False)
+    
+    def delete_task(self, id: int):
+        """ delete task of user
+        
+        Args:
+            self (User): current user
+            id (int): task id
+            
+        Returns:
+            Task: Task object
+        """
+        task = self.get_task(id = id)
+        task.delete()
+        return task
+    
+    def delete_tasks(self, ids: list[int] = []):
+        """ delete tasks of user
+        
+        Args:
+            self (User): current user
+            ids (List[int]): list of task ids
+            
+        Returns:
+            int: number of deleted tasks
+        """
+        return self.tasks.filter(id__in = ids, created_by = self).delete()[0]
+    
+class Task(models.Model):
+    """
+    Task model for storing task information
+    """
+    name            = models.CharField(max_length=100, db_index=True)
+    description     = models.TextField(null=True, blank=True)
+    created_by      = models.ForeignKey(User, on_delete=models.CASCADE, related_name = 'tasks')
+    created_at      = models.DateTimeField(auto_now_add=True)
+    updated_at      = models.DateTimeField(auto_now=True)
+    is_completed    = models.BooleanField(default=False)
+    begin_at        = models.DateTimeField(default=timezone.now, db_index=True)
+    end_at          = models.DateTimeField(blank=True, null=True, default=None, db_index=True)
+    
+    def save(self, *args, **kwargs):
+        """Override save method of task model to set begin_at and end_at field"""
+        if self.end_at is not None and self.begin_at > self.end_at:
+            raise ValueError("begin_at must be less than or equal to end_at")
+        
+        self.updated_at = timezone.now()
+        super().save(*args, **kwargs)
+    
+    def __str__(self):
+        """Generate string representation of task
+
+        Returns:
+            str : String representation of task object, ex : Task 1 created by user1 active from 2021-08-01 00:00:00 to 2021-08-31 00:00:00
+        """
+        return f"{self.name} created by {self.created_by} active from {self.begin_at} to {self.end_at}"
+    
+    @property
+    def duration(self):
+        """Calculate duration of task
+
+        Returns:
+            timedelta : Duration of task
+        """
+        return self.end_at - self.begin_at
+    
